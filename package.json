@@ -89,7 +89,7 @@
     "@mirzazeyrek/node-resemble-js": "^1.2.1",
     "chalk": "^1.1.3",
     "diverged": "^0.1.3",
-    "fs-extra": "^0.30.0",
+    "fs-extra": "^10.0.1",
     "jump.js": "^1.0.2",
     "junit-report-builder": "^1.3.3",
     "lodash": "^4.17.11",
