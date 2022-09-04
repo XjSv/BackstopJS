@@ -1,6 +1,6 @@
 const path = require('path');
 const temp = require('temp');
-const fs = require('fs');
+const fs = require('./fs');
 const hash = require('object-hash');
 const tmpdir = require('os').tmpdir();
 const version = require('../../package.json').version;
@@ -10,7 +10,7 @@ function extendConfig (config, userConfig) {
   ci(config, userConfig);
   htmlReport(config, userConfig);
   jsonReport(config, userConfig);
-  comparePaths(config);
+  comparePaths(config, userConfig);
   captureConfigPaths(config);
   engine(config, userConfig);
 
@@ -80,15 +80,29 @@ function jsonReport (config, userConfig) {
   config.compareJsonFileName = path.join(config.json_report, 'jsonReport.json');
 }
 
-function comparePaths (config) {
+function comparePaths (config, userConfig) {
   config.comparePath = path.join(config.backstop, 'compare/output');
+
+  if (userConfig.comparePath) {
+    config.defaultComparePath = config.comparePath;
+    config.comparePath = userConfig.comparePath;
+
+    if (!fs.existsSync(config.comparePath)) {
+      fs.ensureDir(config.comparePath).then(() => {
+        fs.copy(config.defaultComparePath, config.comparePath);
+      }).catch(err => {
+        console.error(err);
+      });
+    }
+  }
+
   config.tempCompareConfigFileName = temp.path({ suffix: '.json' });
 }
 
 function captureConfigPaths (config) {
   const captureDir = path.join(tmpdir, 'capture');
   if (!fs.existsSync(captureDir)) {
-    fs.mkdirSync(captureDir);
+    fs.ensureDir(captureDir);
   }
   const configHash = hash(config);
   config.captureConfigFileName = path.join(tmpdir, 'capture', configHash + '.json');
