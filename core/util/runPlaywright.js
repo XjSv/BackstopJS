@@ -20,34 +20,91 @@ const DOCUMENT_SELECTOR = 'document';
 const NOCLIP_SELECTOR = 'body:noclip';
 const VIEWPORT_SELECTOR = 'viewport';
 
+/**
+ * @method createPlaywrightBrowser
+ * @function createPlaywrightBrowser
+ * @description Take configuration arguments, sanitize, and create a Playwright browser.
+ * @date 12/23/2023 - 10:13:35 PM
+ *
+ * @async
+ * @param {Object} config
+ * @returns {import('playwright').Browser}
+ */
 module.exports.createPlaywrightBrowser = async function (config) {
   console.log('Creating Browser');
-  let browserChoice = config.engineOptions.browser;
+
+  // Copy and destructure engineOptions for headless mode sanitization
+  let { engineOptions: sanitizedEngineOptions } = JSON.parse(JSON.stringify(config));
+
+  // Destructure other properties to reduce repetition
+  let { browser: browserChoice, headless } = sanitizedEngineOptions;
+
+  // Use Chrommium if no browser set in `engineOptions`
   if (!browserChoice) {
     console.warn(chalk.yellow('No Playwright browser specified, assuming Chromium.'));
     browserChoice = 'chromium';
   }
 
+  // Warn when using an unrecognized variant of `headless` mode
+  if (typeof headless === 'string' && headless !== 'new') {
+    console.warn(chalk.yellow(`The headless mode, "${headless}", may not be supported by Playwright.`));
+  }
+
+  // Error when using unknown `browserChoice`
   if (!playwright[browserChoice]) {
-    console.error(chalk.red(`Unsupported playwright browser "${browserChoice}"`));
+    console.error(chalk.red(`Unsupported Playwright browser "${browserChoice}"`));
     return;
   }
 
+  /**
+   * If headless is defined, and it's not a boolean, proceed with sanitization
+   * of `engineOptions`, setting Playwright to ignore its built in
+   * `--headless` flag. Then, pass the custom `--headless='string'` flag.
+   * NOTE: This is will fail if user defined `headless` mode
+   * is an invalid option for Playwright, but is future-proof if they add something
+   * like 'old' headless mode when 'new' mode is default. A warning is included for this case.
+   */
+  if (typeof headless !== 'undefined' && typeof headless !== 'boolean') {
+    sanitizedEngineOptions = {
+      ...sanitizedEngineOptions,
+      ignoreDefaultArgs: sanitizedEngineOptions.ignoreDefaultArgs ? [...sanitizedEngineOptions.ignoredDefaultArgs, '--headless'] : ['--headless']
+    };
+    sanitizedEngineOptions.args.push(`--headless=${headless}`);
+  }
+
+  /**
+   * @constant playwrightArgs
+   * @type {Object}
+   * @description The arguments to pass Playwright. Sanitizes for `new` headless
+   * mode with Playwright until it is fully supported. `ignoreDefaultArgs:
+   * ['--headless']` silences Playwright's non-boolean warning when passing 'new'.
+   *
+   * @see https://playwright.dev/docs/api/class-browsertype#browser-type-launch-option-headless
+   * @see https://github.com/microsoft/playwright/issues/21194#issuecomment-1444276676
+   *
+   * @example
+   *
+   * ```javascript
+   * {
+   *  args: [ '--no-sandbox', '--headless=new' ],
+   *  headless: true,
+   *  ignoreDefaultArgs: [ '--headless' ]
+   * }
+   * ```
+   */
   const playwrightArgs = Object.assign(
     {},
+    sanitizedEngineOptions,
     {
-      headless: !config.debugWindow
-    },
-    config.engineOptions
+      headless: config.debugWindow
+        ? false
+        : typeof headless === 'boolean' ? headless : typeof headless === 'string' ? headless === 'new' ? true : headless : true
+    }
   );
   return await playwright[browserChoice].launch(playwrightArgs);
 };
 
-module.exports.runPlaywright = function (args) {
-  const scenario = args.scenario;
-  const viewport = args.viewport;
-  const config = args.config;
-  const browser = args._playwrightBrowser;
+module.exports.runPlaywright = function ({ scenario, viewport, config, _playwrightBrowser: browser }) {
   const scenarioLabelSafe = engineTools.makeSafe(scenario.label);
   const variantOrScenarioLabelSafe = scenario._parent ? engineTools.makeSafe(scenario._parent.label) : scenarioLabelSafe;
 
@@ -66,6 +123,18 @@ module.exports.disposePlaywrightBrowser = async function (browser) {
 };
 
 async function processScenarioView (scenario, variantOrScenarioLabelSafe, scenarioLabelSafe, viewport, config, browser) {
+  const { engineOptions, scenarioDefaults = {} } = config;
+
+  /**
+   * @type {Object}
+   * @description Spread `scenarioDefaults` into the scenario.
+   * @default `scenario`
+   */
+  scenario = {
+    ...scenarioDefaults,
+    ...scenario
+  };
+
   if (!config.paths) {
     config.paths = {};
   }
@@ -80,8 +149,8 @@ async function processScenarioView (scenario, variantOrScenarioLabelSafe, scenar
   const VP_W = viewport.width || viewport.viewport.width;
   const VP_H = viewport.height || viewport.viewport.height;
 
-  const ignoreHTTPSErrors = config.engineOptions.ignoreHTTPSErrors ? config.engineOptions.ignoreHTTPSErrors : true;
-  const storageState = config.engineOptions.storageState ? config.engineOptions.storageState : {};
+  const ignoreHTTPSErrors = engineOptions.ignoreHTTPSErrors ? engineOptions.ignoreHTTPSErrors : true;
+  const storageState = engineOptions.storageState ? engineOptions.storageState : {};
   const browserContext = await browser.newContext({ ignoreHTTPSErrors, storageState });
   const page = await browserContext.newPage();
 
@@ -135,7 +204,9 @@ async function processScenarioView (scenario, variantOrScenarioLabelSafe, scenar
     if (isReference && scenario.referenceUrl) {
       url = scenario.referenceUrl;
     }
-    await page.goto(translateUrl(url));
+
+    const gotoParameters = scenario?.engineOptions?.gotoParameters || config?.engineOptions?.gotoParameters || {};
+    await page.goto(translateUrl(url), gotoParameters);
 
     await injectBackstopTools(page);
 
@@ -156,7 +227,6 @@ async function processScenarioView (scenario, variantOrScenarioLabelSafe, scenar
         timeout: readyTimeout
       });
     }
-    //
 
     // --- DELAY ---
     if (scenario.delay > 0) {
